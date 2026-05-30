@@ -116,8 +116,17 @@ Useful env: `ASSEMBLYAI_LANGUAGE=hr` (or `ASSEMBLYAI_LANG_DETECT=true`),
 ## Stage 3 — Obsidian plugin
 
 A desktop-only plugin (`plugin/`) that drives the whole flow from inside Obsidian:
-**Start** → records; **Stop** → asks for a title, then transcribes, summarizes, and
-writes the transcript + MoM notes into the vault (and tears down the audio routing).
+
+- **Start** → records (status-bar `🔴 Recording`).
+- **Stop** → immediately encodes the `.ogg` and **restores your normal audio** (tears
+  down the routing) before anything is sent anywhere.
+- Then a dialog asks whether to **transcribe & summarize** at all — pick a title and
+  proceed, or **"Just keep the audio"** to send nothing. If you proceed, it transcribes
+  (AssemblyAI), summarizes (Claude), and writes the transcript + MoM notes into the vault.
+- A configurable **long-recording warning** (default 2h) pops a reminder so a forgotten
+  recording doesn't run forever.
+
+Your audio is always saved locally first, so a failed/declined transcription never loses it.
 
 ```bash
 cd plugin && npm install && npm run build

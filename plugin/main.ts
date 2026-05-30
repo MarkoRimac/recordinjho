@@ -22,6 +22,7 @@ interface RecordinjhoSettings {
   momFolder: string;
   transcriptFolder: string;
   autoTeardown: boolean;
+  longRecordingWarningMinutes: number; // 0 = disabled
 }
 
 const DEFAULT_SETTINGS: RecordinjhoSettings = {
@@ -33,6 +34,7 @@ const DEFAULT_SETTINGS: RecordinjhoSettings = {
   momFolder: "Meetings",
   transcriptFolder: "Meetings/Transcripts",
   autoTeardown: true,
+  longRecordingWarningMinutes: 120,
 };
 
 /* -------------------------------------------------------------------- helpers */
@@ -84,39 +86,83 @@ function sanitizeTitle(t: string): string {
   return t.replace(/[\\/:*?"<>|]/g, "-").replace(/\s+/g, " ").trim() || "Meeting";
 }
 
+function formatHM(totalMinutes: number): string {
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function formatDuration(seconds: number | null): string {
+  if (seconds === null || !isFinite(seconds)) return "unknown length";
+  const s = Math.round(seconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
 /* ----------------------------------------------------------------- title modal */
 
-class TitleModal extends Modal {
-  private value: string;
-  private onSubmit: (title: string | null) => void;
-  private submitted = false;
+type ProcessChoice = { action: "process"; title: string } | { action: "keep" };
 
-  constructor(app: App, initial: string, onSubmit: (title: string | null) => void) {
+/**
+ * Shown after a recording is stopped & saved (audio already back to normal).
+ * Lets the user decide whether to send the audio off for transcription + summary,
+ * or just keep the .ogg and send nothing. Closing the dialog = keep (send nothing).
+ */
+class ProcessModal extends Modal {
+  private value: string;
+  private oggPath: string;
+  private durationLabel: string;
+  private onChoose: (choice: ProcessChoice) => void;
+  private decided = false;
+
+  constructor(
+    app: App,
+    initialTitle: string,
+    oggPath: string,
+    durationLabel: string,
+    onChoose: (choice: ProcessChoice) => void
+  ) {
     super(app);
-    this.value = initial;
-    this.onSubmit = onSubmit;
+    this.value = initialTitle;
+    this.oggPath = oggPath;
+    this.durationLabel = durationLabel;
+    this.onChoose = onChoose;
   }
 
   onOpen() {
     const { contentEl } = this;
-    contentEl.createEl("h3", { text: "Name this meeting" });
+    contentEl.createEl("h3", { text: "Recording saved" });
+    contentEl.createEl("p", {
+      text: `Audio (${this.durationLabel}) saved and your audio routing is back to normal. Send it for transcription (AssemblyAI) and a Claude summary?`,
+    });
+    const fileLine = contentEl.createEl("p");
+    fileLine.style.fontSize = "0.8em";
+    fileLine.style.opacity = "0.7";
+    fileLine.setText(this.oggPath);
 
+    const label = contentEl.createEl("label", { text: "Meeting title" });
+    label.style.display = "block";
+    label.style.marginTop = "0.5rem";
     const input = contentEl.createEl("input", { type: "text", value: this.value });
     input.style.width = "100%";
     input.addEventListener("input", () => (this.value = input.value));
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
-        this.finish(this.value);
+        this.finish({ action: "process", title: this.value });
       }
     });
 
     const buttons = contentEl.createDiv({ cls: "modal-button-container" });
     buttons.style.marginTop = "1rem";
-    const ok = buttons.createEl("button", { text: "Process recording", cls: "mod-cta" });
-    ok.addEventListener("click", () => this.finish(this.value));
-    const cancel = buttons.createEl("button", { text: "Cancel" });
-    cancel.addEventListener("click", () => this.finish(null));
+    const go = buttons.createEl("button", { text: "Transcribe & summarize", cls: "mod-cta" });
+    go.addEventListener("click", () => this.finish({ action: "process", title: this.value }));
+    const keep = buttons.createEl("button", { text: "Just keep the audio" });
+    keep.addEventListener("click", () => this.finish({ action: "keep" }));
 
     window.setTimeout(() => {
       input.focus();
@@ -124,15 +170,15 @@ class TitleModal extends Modal {
     }, 0);
   }
 
-  private finish(result: string | null) {
-    this.submitted = true;
+  private finish(choice: ProcessChoice) {
+    this.decided = true;
     this.close();
-    this.onSubmit(result);
+    this.onChoose(choice);
   }
 
   onClose() {
     this.contentEl.empty();
-    if (!this.submitted) this.onSubmit(null);
+    if (!this.decided) this.onChoose({ action: "keep" }); // closing = send nothing
   }
 }
 
@@ -143,6 +189,8 @@ export default class RecordinjhoPlugin extends Plugin {
   private recording = false;
   private busy = false;
   private statusBar: HTMLElement;
+  private warnIntervalId?: number;
+  private recordingStartedAt = 0;
 
   async onload() {
     await this.loadSettings();
@@ -174,7 +222,9 @@ export default class RecordinjhoPlugin extends Plugin {
     this.addSettingTab(new RecordinjhoSettingTab(this.app, this));
   }
 
-  onunload() {}
+  onunload() {
+    this.clearWarnTimer();
+  }
 
   private script(name: string): string {
     return path.join(this.settings.scriptsDir, name);
@@ -182,6 +232,49 @@ export default class RecordinjhoPlugin extends Plugin {
 
   private updateStatus() {
     this.statusBar.setText(this.recording ? "🔴 Recording" : "");
+  }
+
+  /* ------------------------------------------------------- long-recording timer */
+
+  private startWarnTimer() {
+    this.clearWarnTimer();
+    const mins = this.settings.longRecordingWarningMinutes;
+    if (!mins || mins <= 0) return;
+    this.recordingStartedAt = Date.now();
+    this.warnIntervalId = window.setInterval(() => {
+      const elapsed = Math.round((Date.now() - this.recordingStartedAt) / 60000);
+      new Notice(
+        `⚠️ Recordinjho: still recording — ${formatHM(elapsed)} elapsed. Check whether you want to wrap up.`,
+        0 // stays until clicked
+      );
+    }, mins * 60_000);
+    this.registerInterval(this.warnIntervalId);
+  }
+
+  private clearWarnTimer() {
+    if (this.warnIntervalId !== undefined) {
+      window.clearInterval(this.warnIntervalId);
+      this.warnIntervalId = undefined;
+    }
+  }
+
+  /** Best-effort audio length via ffprobe (returns null on any failure). */
+  private getDurationSeconds(file: string): Promise<number | null> {
+    return new Promise((resolve) => {
+      const env = { ...process.env, PATH: `${process.env.PATH || ""}:/usr/local/bin:/usr/bin:/bin` };
+      const child = spawn(
+        "ffprobe",
+        ["-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", file],
+        { env }
+      );
+      let out = "";
+      child.stdout.on("data", (d) => (out += d.toString()));
+      child.on("error", () => resolve(null));
+      child.on("close", () => {
+        const n = parseFloat(out.trim());
+        resolve(isFinite(n) ? n : null);
+      });
+    });
   }
 
   /* ---------------------------------------------------------------- actions */
@@ -197,6 +290,7 @@ export default class RecordinjhoPlugin extends Plugin {
       await runScript(this.script("start-recording.sh"), []);
       this.recording = true;
       this.updateStatus();
+      this.startWarnTimer();
       new Notice("Recording started.");
     } catch (e: any) {
       new Notice(`Start failed: ${e.message}`, 8000);
@@ -211,18 +305,44 @@ export default class RecordinjhoPlugin extends Plugin {
       new Notice("Not currently recording.");
       return;
     }
-    if (!this.settings.assemblyAiKey || !this.settings.anthropicKey) {
-      new Notice("Set your AssemblyAI and Anthropic API keys in Recordinjho settings first.", 8000);
+    this.busy = true;
+    let ogg = "";
+    try {
+      // 1) Stop & encode → .ogg path. Do this no matter what comes next.
+      new Notice("Stopping & encoding…");
+      ogg = (await runScript(this.script("stop-recording.sh"), [])).trim();
+      this.recording = false;
+      this.clearWarnTimer();
+      this.updateStatus();
+      if (!ogg) throw new Error("No recording file returned.");
+
+      // 2) Restore normal audio immediately (independent of the transcribe choice).
+      if (this.settings.autoTeardown) {
+        try {
+          await runScript(this.script("teardown-audio.sh"), []);
+        } catch (e: any) {
+          new Notice(`Note: audio teardown failed: ${e.message}`, 6000);
+        }
+      }
+    } catch (e: any) {
+      this.recording = false;
+      this.clearWarnTimer();
+      this.updateStatus();
+      this.busy = false;
+      new Notice(`Stop failed: ${e.message}`, 10000);
       return;
     }
+    this.busy = false;
 
+    // 3) Ask whether to send it anywhere at all.
     const { date } = nowStamp();
-    new TitleModal(this.app, `${date} Meeting`, (title) => {
-      if (title === null) {
-        new Notice("Cancelled — recording is still running. Stop again to process.");
+    const durationLabel = formatDuration(await this.getDurationSeconds(ogg));
+    new ProcessModal(this.app, `${date} Meeting`, ogg, durationLabel, (choice) => {
+      if (choice.action === "keep") {
+        new Notice(`Kept audio only — nothing sent. ${ogg}`, 6000);
         return;
       }
-      void this.process(sanitizeTitle(title));
+      void this.transcribeAndSummarize(ogg, sanitizeTitle(choice.title));
     }).open();
   }
 
@@ -233,18 +353,19 @@ export default class RecordinjhoPlugin extends Plugin {
     return {};
   }
 
-  private async process(title: string) {
+  /** Send a saved recording for transcription + summary and write the notes. */
+  private async transcribeAndSummarize(ogg: string, title: string) {
+    if (!this.settings.assemblyAiKey || !this.settings.anthropicKey) {
+      new Notice(
+        `Missing API keys — set AssemblyAI + Anthropic in Recordinjho settings. Your audio is kept at: ${ogg}`,
+        10000
+      );
+      return;
+    }
     this.busy = true;
     const { date, time } = nowStamp();
     try {
-      // 1) Stop & encode → .ogg path
-      new Notice("Stopping & encoding…");
-      const ogg = (await runScript(this.script("stop-recording.sh"), [])).trim();
-      this.recording = false;
-      this.updateStatus();
-      if (!ogg) throw new Error("No recording file returned.");
-
-      // 2) Transcribe (diarized)
+      // Transcribe (diarized)
       new Notice("Transcribing with AssemblyAI…");
       const transcript = await runScript(this.script("transcribe.sh"), [ogg, "-"], {
         env: { ASSEMBLYAI_API_KEY: this.settings.assemblyAiKey, ...this.langEnv() },
@@ -255,7 +376,7 @@ export default class RecordinjhoPlugin extends Plugin {
         transcript
       );
 
-      // 3) Summarize → MoM (transcript via stdin)
+      // Summarize → MoM (transcript via stdin)
       new Notice("Summarizing with Claude…");
       const mom = await runScript(this.script("summarize.sh"), ["-", "-"], {
         env: {
@@ -269,20 +390,10 @@ export default class RecordinjhoPlugin extends Plugin {
       });
       const momFile = await this.writeNote(this.settings.momFolder, `${date} ${title}.md`, mom);
 
-      // 4) Optional teardown
-      if (this.settings.autoTeardown) {
-        try {
-          await runScript(this.script("teardown-audio.sh"), []);
-        } catch (e: any) {
-          new Notice(`Note: audio teardown failed: ${e.message}`, 6000);
-        }
-      }
-
-      // 5) Open the MoM note
       await this.app.workspace.getLeaf(true).openFile(momFile);
       new Notice(`Done. Transcript: ${transcriptFile.path}`, 6000);
     } catch (e: any) {
-      new Notice(`Processing failed: ${e.message}`, 10000);
+      new Notice(`Processing failed (audio is safe at ${ogg}): ${e.message}`, 10000);
     } finally {
       this.busy = false;
     }
@@ -417,11 +528,22 @@ class RecordinjhoSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Tear down audio routing after each meeting")
-      .setDesc("Restore your default sink and unload the modules when processing finishes.")
+      .setName("Restore audio when recording stops")
+      .setDesc("Tear down the routing (restore your default sink, unload the modules) the moment you stop, before any transcription.")
       .addToggle((tg) =>
         tg.setValue(this.plugin.settings.autoTeardown).onChange(async (v) => {
           this.plugin.settings.autoTeardown = v;
+          await save();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Long-recording warning (minutes)")
+      .setDesc("Pop a reminder once a recording passes this many minutes (repeats each interval). 0 disables it.")
+      .addText((t) =>
+        t.setValue(String(this.plugin.settings.longRecordingWarningMinutes)).onChange(async (v) => {
+          const n = parseInt(v.trim(), 10);
+          this.plugin.settings.longRecordingWarningMinutes = isNaN(n) || n < 0 ? 0 : n;
           await save();
         })
       );
