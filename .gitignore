@@ -1,0 +1,6 @@
+# Recorded audio — large and private, never commit
+recordings/
+
+# Editor / OS noise
+*.swp
+.DS_Store
