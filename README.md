@@ -89,6 +89,49 @@ if the environment isn't supported (see Compatibility).
 Recordings land in `recordings/` (git-ignored). Override device autodetection with
 `HW=<sink> MIC=<source> ./scripts/setup-audio.sh`.
 
+## Stage 2 — transcription & summary (CLI)
+
+Turn a recording into a diarized transcript (AssemblyAI) and a Minutes-of-Meeting
+note (Claude). Put your keys in a git-ignored `.env` (see `.env.example`):
+
+```bash
+cp .env.example .env          # then fill in ASSEMBLYAI_API_KEY + ANTHROPIC_API_KEY
+set -a; source .env; set +a
+
+# Transcript only (diarized, "**Speaker A:** …"):
+ASSEMBLYAI_LANG_DETECT=true ./scripts/transcribe.sh recordings/<file>.ogg out.md
+
+# MoM only (from a transcript):
+./scripts/summarize.sh out.md mom.md
+
+# Or both at once → recordings/<file>.transcript.md and .mom.md:
+./scripts/process-recording.sh recordings/<file>.ogg "Optional Title"
+```
+
+Useful env: `ASSEMBLYAI_LANGUAGE=hr` (or `ASSEMBLYAI_LANG_DETECT=true`),
+`ASSEMBLYAI_SPEECH_MODEL` (default `universal-2`), `RECORDINJHO_MODEL`
+(default `claude-sonnet-4-6`). These scripts are cross-platform (just need
+`curl` + `jq`) — no PipeWire required.
+
+## Stage 3 — Obsidian plugin
+
+A desktop-only plugin (`plugin/`) that drives the whole flow from inside Obsidian:
+**Start** → records; **Stop** → asks for a title, then transcribes, summarizes, and
+writes the transcript + MoM notes into the vault (and tears down the audio routing).
+
+```bash
+cd plugin && npm install && npm run build
+# then symlink the build into your vault:
+ln -sf "$PWD/main.js"       <vault>/.obsidian/plugins/recordinjho/main.js
+ln -sf "$PWD/manifest.json" <vault>/.obsidian/plugins/recordinjho/manifest.json
+```
+
+Enable **Recordinjho** under Settings → Community plugins, then set your API keys,
+folders, and language in its settings tab. The Stage-1/2 scripts do the real work;
+the plugin just orchestrates them and writes the notes. (Keys are stored in the
+plugin's `data.json` inside the vault — plaintext, so don't sync that file publicly.)
+Optionally install/update via **BRAT** from GitHub releases.
+
 ## Compatibility
 
 | Environment | Status |
@@ -115,9 +158,9 @@ explanation rather than misbehaving.
 
 ## Roadmap
 
-- [x] **Stage 1** — app-independent loopback capture → Opus file *(this repo)*
-- [ ] **Stage 2** — upload to a diarizing STT API (AssemblyAI / Deepgram) → transcript
-- [ ] **Stage 3** — LLM (Claude / OpenAI) → Minutes-of-Meeting note for Obsidian
+- [x] **Stage 1** — app-independent loopback capture → Opus file
+- [x] **Stage 2** — AssemblyAI diarized transcript + Claude Minutes-of-Meeting (CLI)
+- [x] **Stage 3** — Obsidian plugin orchestrating the whole flow into the vault
 - [ ] systemd `--user` service so the routing is set up automatically at login
 - [ ] genuine-PulseAudio support, then other backends/OSes
-- [ ] Obsidian plugin to drive the whole flow from inside the vault
+- [ ] optional transcript cleanup / deletion after summarizing

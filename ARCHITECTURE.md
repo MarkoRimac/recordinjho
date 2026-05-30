@@ -137,6 +137,39 @@ pw-record --target meeting.monitor out.wav   # → ffmpeg → Opus .ogg
 between your voice and others' in the recording, but more risk of underrun glitches.
 50 ms is a safe default and irrelevant to diarization.
 
+## Stage 2 / Stage 3 data flow
+
+Stage 1 ends at an `.ogg`. The rest is plain "file in → text out" steps, so they live in
+small CLI scripts; the Obsidian plugin just orchestrates them and owns the vault writes.
+
+```
+ recordings/<name>.ogg
+        │  transcribe.sh  (curl)
+        ▼
+   AssemblyAI:  POST /v2/upload → upload_url
+                POST /v2/transcript {audio_url, speaker_labels:true, speech_models:[…]}
+                poll GET /v2/transcript/{id} until "completed"
+        │  utterances[] → "**Speaker A:** …" (jq)
+        ▼
+   transcript.md
+        │  summarize.sh  (curl → Anthropic POST /v1/messages, model claude-sonnet-4-6)
+        ▼
+   MoM.md   (matches _Templates/Meeting Minutes.md)
+
+ Plugin (plugin/main.ts, desktop-only):
+   Start → bash start-recording.sh
+   Stop  → title modal → bash stop-recording.sh (→ .ogg path on stdout)
+         → bash transcribe.sh <ogg> -        (key via env, transcript on stdout)
+         → vault.create(Meetings/Transcripts/<date> <title>.md)
+         → bash summarize.sh - -             (transcript via stdin, MoM on stdout)
+         → vault.create(Meetings/<date> <title>.md) → open it
+         → (optional) bash teardown-audio.sh
+```
+
+Key boundary choices: scripts print **only data to stdout** (status → stderr) so the
+plugin can capture results cleanly; **secrets pass via `child_process` env**, never argv;
+and the same scripts run standalone from the terminal — the plugin adds no logic of its own.
+
 ## Common misconception (worth keeping straight)
 
 > "The recording software is basically the null sink."

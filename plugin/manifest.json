@@ -1,0 +1,10 @@
+{
+  "id": "recordinjho",
+  "name": "Recordinjho",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Record meetings from any app, transcribe with speaker diarization (AssemblyAI), and summarize into Minutes-of-Meeting notes with Claude. Linux/PipeWire only.",
+  "author": "Marko Rimac",
+  "authorUrl": "https://github.com/MarkoRimac/recordinjho",
+  "isDesktopOnly": true
+}
