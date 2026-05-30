@@ -33,9 +33,10 @@ case "$MIC" in
     *.monitor) die "Default source '$MIC' is a monitor, not a real mic. Set MIC=<your-mic>." ;;
 esac
 
-echo "Real output (HW) : $HW"
-echo "Microphone       : $MIC"
-echo
+# Status → stderr (keep stdout clean for callers that capture it, e.g. the plugin).
+echo "Real output (HW) : $HW" >&2
+echo "Microphone       : $MIC" >&2
+echo >&2
 
 # 1) null sink = the recording bus
 NULL_ID=$(pactl load-module module-null-sink \
@@ -65,8 +66,10 @@ LOOP_ID=$(pactl load-module module-loopback \
 } > "$STATE_FILE"
 
 _c_grn "Routing is up. Default sink is now '$COMBINE_SINK_NAME'."
-echo
-echo "Next:  ./scripts/record.sh"
-echo "Note:  apps already running keep their old output — move them to 'CaptureAndPlay'"
-echo "       in pavucontrol (Playback tab) or restart them. New apps follow automatically."
-echo "When done:  ./scripts/teardown-audio.sh"
+{
+    echo
+    echo "Next:  ./scripts/record.sh"
+    echo "Note:  apps already running keep their old output — move them to 'CaptureAndPlay'"
+    echo "       in pavucontrol (Playback tab) or restart them. New apps follow automatically."
+    echo "When done:  ./scripts/teardown-audio.sh"
+} >&2

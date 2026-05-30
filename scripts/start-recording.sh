@@ -30,7 +30,8 @@ if ! source_exists "$MONITOR_SOURCE"; then
     "$DIR/setup-audio.sh"
 fi
 
-REC_DIR="$REPO_DIR/recordings"
+# Output dir: env override (the plugin points this at a vault folder) or repo default.
+REC_DIR="${RECORDINJHO_REC_DIR:-$REPO_DIR/recordings}"
 mkdir -p "$REC_DIR"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 NAME="${1:-meeting-$STAMP}"

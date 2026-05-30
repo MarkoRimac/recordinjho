@@ -7,6 +7,7 @@ import {
   Modal,
   SuggestModal,
   TFile,
+  FileSystemAdapter,
   normalizePath,
 } from "obsidian";
 import { spawn } from "child_process";
@@ -23,6 +24,7 @@ interface RecordinjhoSettings {
   language: string; // "" = English, "auto" = detect, or a code like "hr"
   momFolder: string;
   transcriptFolder: string;
+  audioFolder: string; // vault-relative folder for the .ogg recordings
   autoTeardown: boolean;
   longRecordingWarningMinutes: number; // 0 = disabled
 }
@@ -35,6 +37,7 @@ const DEFAULT_SETTINGS: RecordinjhoSettings = {
   language: "auto",
   momFolder: "Meetings",
   transcriptFolder: "Meetings/Transcripts",
+  audioFolder: "Recordings/Audio",
   autoTeardown: true,
   longRecordingWarningMinutes: 120,
 };
@@ -271,6 +274,15 @@ export default class RecordinjhoPlugin extends Plugin {
     return path.join(this.settings.scriptsDir, name);
   }
 
+  /** Absolute path of the (vault-relative) audio folder; null if vault path unknown. */
+  private audioDir(): string | null {
+    const adapter = this.app.vault.adapter;
+    if (adapter instanceof FileSystemAdapter) {
+      return path.join(adapter.getBasePath(), normalizePath(this.settings.audioFolder));
+    }
+    return null;
+  }
+
   private updateStatus() {
     this.statusBar.setText(this.recording ? "🔴 Recording" : "");
   }
@@ -328,7 +340,8 @@ export default class RecordinjhoPlugin extends Plugin {
     }
     this.busy = true;
     try {
-      await runScript(this.script("start-recording.sh"), []);
+      const dir = this.audioDir();
+      await runScript(this.script("start-recording.sh"), [], dir ? { env: { RECORDINJHO_REC_DIR: dir } } : {});
       this.recording = true;
       this.updateStatus();
       this.startWarnTimer();
@@ -398,7 +411,7 @@ export default class RecordinjhoPlugin extends Plugin {
       new Notice("Busy — try again in a moment.");
       return;
     }
-    const recDir = path.join(path.dirname(this.settings.scriptsDir), "recordings");
+    const recDir = this.audioDir() ?? path.join(path.dirname(this.settings.scriptsDir), "recordings");
     let items: RecItem[];
     try {
       items = fs
@@ -606,6 +619,16 @@ class RecordinjhoSettingTab extends PluginSettingTab {
       .addText((t) =>
         t.setValue(this.plugin.settings.transcriptFolder).onChange(async (v) => {
           this.plugin.settings.transcriptFolder = v.trim() || DEFAULT_SETTINGS.transcriptFolder;
+          await save();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Audio folder (in vault)")
+      .setDesc("Vault-relative folder where the .ogg recordings are saved. Large files — consider excluding it from vault git/sync.")
+      .addText((t) =>
+        t.setValue(this.plugin.settings.audioFolder).onChange(async (v) => {
+          this.plugin.settings.audioFolder = v.trim() || DEFAULT_SETTINGS.audioFolder;
           await save();
         })
       );

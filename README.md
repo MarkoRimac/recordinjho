@@ -126,9 +126,16 @@ A desktop-only plugin (`plugin/`) that drives the whole flow from inside Obsidia
 - A configurable **long-recording warning** (default 2h) pops a reminder so a forgotten
   recording doesn't run forever.
 
-Your audio is always saved locally first, so a failed/declined transcription never loses it.
-Kept a recording for later? The command **"Process an existing recording"** lists the
-`.ogg` files in `recordings/` (newest first) and runs the same transcribe + summarize flow.
+Plugin recordings are saved **into the vault** (default `Recordings/Audio/`, configurable
+in settings) so kept-but-not-transcribed audio lives with your notes. The CLI scripts
+still default to the repo's `recordings/`. Your audio is always saved locally first, so a
+failed/declined transcription never loses it. Kept one for later? The command
+**"Process an existing recording"** lists the `.ogg` files in that folder (newest first)
+and runs the same transcribe + summarize flow.
+
+> Audio files are large. If your vault is under git/sync (e.g. obsidian-git), exclude the
+> audio folder — add `Recordings/Audio/` to the vault's `.gitignore` or Obsidian's
+> Settings → Files & Links → Excluded files.
 
 ```bash
 cd plugin && npm install && npm run build
