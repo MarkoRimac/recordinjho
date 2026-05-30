@@ -1,45 +1,22 @@
 #!/usr/bin/env bash
-# record.sh — capture the recording bus (all app audio + your mic) to Opus .ogg.
+# record.sh — interactive capture: start, wait for Ctrl-C, stop & encode.
 #
-# Records meeting.monitor to a temp WAV; press Ctrl-C to stop, then it encodes to
-# a timestamped Opus file under recordings/.
+# Thin wrapper over start-recording.sh + stop-recording.sh so the interactive CLI
+# and the plugin share one code path.
 #
-# Usage:  ./record.sh [output-name-without-extension]
-#
-# pw-record runs in the FOREGROUND: a terminal Ctrl-C delivers SIGINT to the whole
-# process group, pw-record finalises the WAV and exits, and the script then encodes.
-# The INT/TERM trap is just so bash doesn't abort before reaching the encode step.
+# Usage:  ./record.sh [name-without-extension]
 
 source "$(dirname "$(readlink -f "$0")")/lib/preflight.sh"
 preflight_require pw-record ffmpeg
 
-if ! source_exists "$MONITOR_SOURCE"; then
-    die "Recording bus '$MONITOR_SOURCE' not found. Run ./scripts/setup-audio.sh first."
-fi
+DIR="$(dirname "$(readlink -f "$0")")"
 
-REPO_DIR="$(dirname "$(dirname "$(readlink -f "$0")")")"
-REC_DIR="$REPO_DIR/recordings"
-mkdir -p "$REC_DIR"
+"$DIR/start-recording.sh" "${1:-}" >/dev/null
+echo "Recording — press Ctrl-C to stop."
 
-STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-NAME="${1:-meeting-$STAMP}"
-WAV="$REC_DIR/.${NAME}.tmp.wav"
-OGG="$REC_DIR/${NAME}.ogg"
+STOP=0
+trap 'STOP=1' INT TERM
+while [ "$STOP" = 0 ]; do sleep 0.5 || true; done
 
-trap 'echo' INT TERM   # swallow the signal so we fall through to encoding below
-
-echo "Recording '$MONITOR_SOURCE' → $OGG"
-echo "Press Ctrl-C to stop."
-
-# Foreground capture. On Ctrl-C, pw-record exits ~130; don't let set -e abort us.
-pw-record --target "$MONITOR_SOURCE" "$WAV" || true
-
-if [ -s "$WAV" ]; then
-    echo "Encoding to Opus → $OGG"
-    ffmpeg -hide_banner -loglevel error -y -i "$WAV" -c:a libopus -b:a 48k "$OGG"
-    rm -f "$WAV"
-    _c_grn "Saved: $OGG"
-else
-    rm -f "$WAV"
-    die "No audio was captured (empty recording)."
-fi
+echo
+"$DIR/stop-recording.sh" >/dev/null

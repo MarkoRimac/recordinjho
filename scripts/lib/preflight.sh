@@ -12,12 +12,15 @@ set -euo pipefail
 NULL_SINK_NAME="meeting"
 COMBINE_SINK_NAME="capture_and_play"
 MONITOR_SOURCE="${NULL_SINK_NAME}.monitor"
-STATE_FILE="${XDG_RUNTIME_DIR:-/tmp}/recordinjho.state"
+STATE_FILE="${XDG_RUNTIME_DIR:-/tmp}/recordinjho.state"   # audio-routing module IDs
+REC_STATE="${XDG_RUNTIME_DIR:-/tmp}/recordinjho.rec"      # active recording (PID + paths)
 
 # --- pretty printing -------------------------------------------------------
+# All status output goes to stderr so stdout stays clean for data (e.g. the .ogg
+# path printed by start/stop-recording.sh, which the plugin captures).
 _c_red()  { printf '\033[0;31m%s\033[0m\n' "$*" >&2; }
 _c_ylw()  { printf '\033[0;33m%s\033[0m\n' "$*" >&2; }
-_c_grn()  { printf '\033[0;32m%s\033[0m\n' "$*"; }
+_c_grn()  { printf '\033[0;32m%s\033[0m\n' "$*" >&2; }
 
 die() { _c_red "ERROR: $*"; exit 1; }
 
