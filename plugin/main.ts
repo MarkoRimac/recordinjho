@@ -5,11 +5,13 @@ import {
   PluginSettingTab,
   Setting,
   Modal,
+  SuggestModal,
   TFile,
   normalizePath,
 } from "obsidian";
 import { spawn } from "child_process";
 import * as path from "path";
+import * as fs from "fs";
 
 /* ------------------------------------------------------------------ settings */
 
@@ -182,6 +184,40 @@ class ProcessModal extends Modal {
   }
 }
 
+interface RecItem {
+  path: string;
+  name: string;
+  subtitle: string;
+}
+
+/** Picker over the .ogg files in the recordings/ folder (newest first). */
+class RecordingSuggestModal extends SuggestModal<RecItem> {
+  private items: RecItem[];
+  private onPick: (item: RecItem) => void;
+
+  constructor(app: App, items: RecItem[], onPick: (item: RecItem) => void) {
+    super(app);
+    this.items = items;
+    this.onPick = onPick;
+    this.setPlaceholder("Pick a recording to transcribe & summarize");
+  }
+
+  getSuggestions(query: string): RecItem[] {
+    const q = query.toLowerCase();
+    return this.items.filter((i) => i.name.toLowerCase().includes(q));
+  }
+
+  renderSuggestion(item: RecItem, el: HTMLElement) {
+    el.createEl("div", { text: item.name });
+    const sub = el.createEl("small", { text: item.subtitle });
+    sub.style.opacity = "0.7";
+  }
+
+  onChooseSuggestion(item: RecItem) {
+    this.onPick(item);
+  }
+}
+
 /* -------------------------------------------------------------------- plugin */
 
 export default class RecordinjhoPlugin extends Plugin {
@@ -217,6 +253,11 @@ export default class RecordinjhoPlugin extends Plugin {
       id: "stop-and-process",
       name: "Stop recording & process (transcribe + summarize)",
       callback: () => this.stopAndProcess(),
+    });
+    this.addCommand({
+      id: "process-existing",
+      name: "Process an existing recording",
+      callback: () => this.processExisting(),
     });
 
     this.addSettingTab(new RecordinjhoSettingTab(this.app, this));
@@ -335,6 +376,11 @@ export default class RecordinjhoPlugin extends Plugin {
     this.busy = false;
 
     // 3) Ask whether to send it anywhere at all.
+    await this.confirmAndProcess(ogg);
+  }
+
+  /** Show the confirm+title dialog for a saved .ogg and process it if accepted. */
+  private async confirmAndProcess(ogg: string) {
     const { date } = nowStamp();
     const durationLabel = formatDuration(await this.getDurationSeconds(ogg));
     new ProcessModal(this.app, `${date} Meeting`, ogg, durationLabel, (choice) => {
@@ -343,6 +389,43 @@ export default class RecordinjhoPlugin extends Plugin {
         return;
       }
       void this.transcribeAndSummarize(ogg, sanitizeTitle(choice.title));
+    }).open();
+  }
+
+  /** Pick an existing recording from recordings/ and process it. */
+  private processExisting() {
+    if (this.busy) {
+      new Notice("Busy — try again in a moment.");
+      return;
+    }
+    const recDir = path.join(path.dirname(this.settings.scriptsDir), "recordings");
+    let items: RecItem[];
+    try {
+      items = fs
+        .readdirSync(recDir)
+        .filter((f) => f.toLowerCase().endsWith(".ogg"))
+        .map((f) => {
+          const full = path.join(recDir, f);
+          const st = fs.statSync(full);
+          return {
+            path: full,
+            name: f,
+            subtitle: `${(st.size / 1024 / 1024).toFixed(1)} MB · ${new Date(st.mtimeMs).toLocaleString()}`,
+            mtime: st.mtimeMs,
+          };
+        })
+        .sort((a, b) => b.mtime - a.mtime)
+        .map(({ path, name, subtitle }) => ({ path, name, subtitle }));
+    } catch (e: any) {
+      new Notice(`Could not read recordings folder (${recDir}): ${e.message}`, 8000);
+      return;
+    }
+    if (items.length === 0) {
+      new Notice(`No .ogg recordings found in ${recDir}.`, 6000);
+      return;
+    }
+    new RecordingSuggestModal(this.app, items, (item) => {
+      void this.confirmAndProcess(item.path);
     }).open();
   }
 

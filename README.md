@@ -127,6 +127,8 @@ A desktop-only plugin (`plugin/`) that drives the whole flow from inside Obsidia
   recording doesn't run forever.
 
 Your audio is always saved locally first, so a failed/declined transcription never loses it.
+Kept a recording for later? The command **"Process an existing recording"** lists the
+`.ogg` files in `recordings/` (newest first) and runs the same transcribe + summarize flow.
 
 ```bash
 cd plugin && npm install && npm run build
