@@ -1,6 +1,9 @@
 # Recorded audio — large and private, never commit
 recordings/
 
+# Secrets — API keys, never commit (.env.example is the committed template)
+.env
+
 # Editor / OS noise
 *.swp
 .DS_Store
